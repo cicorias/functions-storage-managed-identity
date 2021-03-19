@@ -14,6 +14,12 @@ using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
 
+using System.IO;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Azure.Identity;
+using System.Text;
+
 namespace StorageMSIFunction
 {
     public static class Functions
@@ -56,6 +62,55 @@ namespace StorageMSIFunction
                     .WithDefaultSubscription();
             }
         });
+
+        [FunctionName(nameof(WriteMessage))]
+        public static async Task<IActionResult> WriteMessage(
+            [HttpTrigger(AuthorizationLevel.Function, "post", Route = null)] HttpRequest req,
+            ILogger log){
+
+            log.LogInformation("C# HTTP trigger function processed a request.");
+            string requestBody;
+            using (StreamReader streamReader = new StreamReader(req.Body))
+            {
+                requestBody = await streamReader.ReadToEndAsync();
+            }
+            dynamic data = JsonConvert.DeserializeObject(requestBody);
+
+            string accountName = data?.accountName;
+            string jsonToUpload = data?.message;
+
+            if (String.IsNullOrEmpty(accountName))
+            {
+                return new BadRequestObjectResult($@"Request must contain json element 'accountName' designating the storage account for which you wish send message");
+            }
+
+            if (String.IsNullOrEmpty(jsonToUpload))
+            {
+                return new BadRequestObjectResult($@"Request must contain json element 'message' which is the message to upload");
+            }
+
+            //BlobServiceClient blobServiceClient = new BlobServiceClient(
+            //        new Uri($"https://{accountName}.blob.core.windows.net"),
+            //        new ManagedIdentityCredential());
+
+
+            var container = new Uri($"https://{accountName}.blob.core.windows.net/messages");
+
+            BlobContainerClient containerClient = new BlobContainerClient(container, new ManagedIdentityCredential());
+            containerClient.CreateIfNotExists();
+         
+            string fileName = "message-" + Guid.NewGuid().ToString() + ".txt";
+            BlobClient blobClient = containerClient.GetBlobClient(fileName);
+
+            using (MemoryStream ms = new MemoryStream(Encoding.UTF8.GetBytes(jsonToUpload)))
+            {
+                await blobClient.UploadAsync(ms);
+            }
+
+
+            return (ActionResult)new OkObjectResult($"written to , {accountName}");
+
+        }
 
         [FunctionName(nameof(GetSASUrl))]
         public static IActionResult GetSASUrl(
